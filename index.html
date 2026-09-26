@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>فاتورة جديدة</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  /* Telegram hands us its theme; these are only fallbacks */
+  :root{
+    --bg:var(--tg-theme-bg-color,#fff);
+    --text:var(--tg-theme-text-color,#1d1d1f);
+    --hint:var(--tg-theme-hint-color,#8e8e93);
+    --field:var(--tg-theme-secondary-bg-color,#f2f2f4);
+    --accent:var(--tg-theme-button-color,#2481cc);
+    --accent-text:var(--tg-theme-button-text-color,#fff);
+    --danger:var(--tg-theme-destructive-text-color,#e53935);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px 16px 96px;background:var(--bg);color:var(--text);
+       font:16px/1.4 -apple-system,"SF Pro Text","Segoe UI",sans-serif}
+  h1{font-size:22px;margin:4px 0 18px}
+  label{display:block;font-size:13px;color:var(--hint);margin:16px 0 6px}
+  select,input{width:100%;font:inherit;color:var(--text);background:var(--field);
+       border:0;border-radius:12px;padding:12px 14px;outline:none;appearance:none}
+  input:focus,select:focus{box-shadow:0 0 0 2px var(--accent)}
+  .row{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+  .row .work{flex:1 1 auto;min-width:0}
+  .row .amt{flex:0 0 32%;direction:ltr;text-align:left}
+  .x{flex:0 0 40px;height:44px;border:0;border-radius:12px;background:var(--field);
+     color:var(--danger);font-size:18px}
+  .x:disabled{opacity:.3}
+  .add{width:100%;border:0;border-radius:12px;padding:12px;background:var(--field);
+       color:var(--accent);font:inherit;font-weight:600;margin-top:4px}
+  .total{display:flex;justify-content:space-between;margin-top:18px;font-weight:700;font-size:18px}
+  .total span:last-child{direction:ltr}
+  .err{color:var(--danger);font-size:14px;min-height:20px;margin-top:10px}
+  #submit{position:fixed;left:16px;right:16px;bottom:16px;border:0;border-radius:14px;
+       padding:15px;background:var(--accent);color:var(--accent-text);font:inherit;font-weight:700}
+  #newClient{margin-top:8px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<h1>🧾 فاتورة جديدة</h1>
+
+<label for="client">العميل</label>
+<select id="client"></select>
+<input id="newClient" class="hidden" placeholder="اسم العميل الجديد" autocomplete="off">
+
+<label for="currency">العملة</label>
+<select id="currency">
+  <option>OMR</option><option>USD</option><option>AED</option><option>SAR</option>
+</select>
+
+<label>البنود</label>
+<div id="rows"></div>
+<button class="add" id="add" type="button">➕ Add</button>
+
+<div class="total"><span>المجموع</span><span id="total">0</span></div>
+<div class="err" id="err"></div>
+
+<button id="submit" type="button">إرسال</button>
+
+<script>
+  const tg = window.Telegram && Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  // Saved clients come in the URL fragment (#c=<base64url JSON>): the fragment
+  // never leaves the phone, so no client name is ever stored on this page.
+  function savedClients() {
+    try {
+      const raw = new URLSearchParams(location.hash.slice(1)).get("c");
+      if (!raw) return [];
+      const b64 = raw.replace(/-/g, "+").replace(/_/g, "/");
+      const bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
+      const list = JSON.parse(new TextDecoder().decode(bytes));
+      return Array.isArray(list) ? list.filter(n => typeof n === "string") : [];
+    } catch (e) { return []; }
+  }
+
+  const NEW = "__new__";
+  const client = document.getElementById("client");
+  const newClient = document.getElementById("newClient");
+  for (const name of savedClients()) client.add(new Option(name, name));
+  client.add(new Option("➕ New client", NEW));
+  const syncClient = () => newClient.classList.toggle("hidden", client.value !== NEW);
+  client.addEventListener("change", () => { syncClient(); if (client.value === NEW) newClient.focus(); });
+  syncClient();
+
+  const currency = document.getElementById("currency");
+  const rows = document.getElementById("rows");
+  const decimals = () => currency.value === "OMR" ? 3 : 2;
+
+  function addRow() {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML =
+      '<input class="work" placeholder="العمل" autocomplete="off">' +
+      '<input class="amt" placeholder="0" inputmode="decimal" autocomplete="off">' +
+      '<button class="x" type="button" aria-label="حذف">✕</button>';
+    row.querySelector(".x").onclick = () => { row.remove(); refresh(); };
+    row.querySelector(".amt").oninput = refresh;
+    rows.appendChild(row);
+    refresh();
+    return row;
+  }
+
+  // Arabic-Indic digits and the Arabic decimal separator are accepted too
+  function num(s) {
+    s = String(s).trim()
+      .replace(/[٠-٩]/g, d => d.charCodeAt(0) - 1632)
+      .replace(/[٫]/g, ".").replace(/[,،٬\s]/g, "");
+    return /^\d+(\.\d+)?$/.test(s) ? Number(s) : NaN;
+  }
+
+  function refresh() {
+    const all = [...rows.children];
+    all.forEach(r => r.querySelector(".x").disabled = all.length === 1);
+    const sum = all.reduce((t, r) => t + (num(r.querySelector(".amt").value) || 0), 0);
+    document.getElementById("total").textContent =
+      currency.value + " " + sum.toLocaleString("en-US",
+        { minimumFractionDigits: decimals(), maximumFractionDigits: decimals() });
+  }
+
+  currency.addEventListener("change", refresh);
+  document.getElementById("add").onclick = () => addRow().querySelector(".work").focus();
+  addRow();
+
+  document.getElementById("submit").onclick = () => {
+    const err = document.getElementById("err");
+    err.textContent = "";
+    const name = (client.value === NEW ? newClient.value : client.value).trim();
+    if (!name) { err.textContent = "اكتب اسم العميل"; return; }
+
+    const items = [];
+    for (const r of rows.children) {
+      const work = r.querySelector(".work").value.trim();
+      const raw = r.querySelector(".amt").value;
+      if (!work && !raw.trim()) continue;          // an empty row is just ignored
+      const amount = num(raw);
+      if (!work || !(amount > 0)) { err.textContent = "كل بند يحتاج عمل ومبلغ"; return; }
+      items.push({ work, amount });
+    }
+    if (!items.length) { err.textContent = "أضف بند واحد على الأقل"; return; }
+
+    const data = JSON.stringify({ t: "invoice", v: 1, client: name,
+                                  currency: currency.value, items });
+    if (!tg || !tg.sendData) { err.textContent = "افتحها من زر البوت في تلقرام"; return; }
+    tg.sendData(data);   // Telegram closes the form and delivers this to the bot
+  };
+</script>
+</body>
+</html>
